@@ -1,0 +1,192 @@
+#!/bin/bash
+
+
+COINDTAG=xvg
+COINNAME=Verge
+COINDSRC=https://github.com/vergecurrency/verge.git
+COINDVER=1.0.0
+COINDARC=all
+
+
+COIND=${COINDTAG^^}
+COINU=${COINDTAG,,}
+GROUP=miner
+
+CTEMP=/var/www/miner/build/$COINU
+CHOME=var/www/miner/$COINU
+CDATA=$CHOME/data
+
+COINDBKP=/root/Private/coin/$COINU
+COINDDEB=coind-${COIND,,}-${COINDVER,,}-${COINDARC,,}.deb
+
+
+[ $(dpkg-query -W -f='${Status}' python-pygments 2>/dev/null | grep -c "ok installed") == 1 ] || apt-get install python-pygments
+
+STEPN=1
+mkdir -p $CTEMP
+cat > $CTEMP/$COIND-install <<ENDOFSCRIPT
+#!/bin/bash
+
+
+pygmentize -f 256 -l bash "\$0" | less +/"^##*\s*\${1-1}:*\s.*" -KR; exit 0
+
+
+### $((STEPN++)): Make coind ###
+
+sudo apt-get update
+sudo apt-get install build-essential libtool autotools-dev automake pkg-config git
+sudo apt-get install libssl-dev libevent-dev bsdmainutils libboost-all-dev libminiupnpc-dev libprotobuf-dev protobuf-compiler
+#sudo apt-get install libcanberra-gtk-module
+sudo apt-get install libdb4.8-dev libdb4.8++-dev
+#cat $COINDBKP/../install-libdb4.8.txt # if no in apt
+
+mkdir -p $CTEMP; cd $CTEMP
+git clone $COINDSRC src
+chmod 750 src
+
+fakeroot
+cd src
+./autogen.sh
+./configure --with-qrencode=no --with-gui=no USE_QRCODE=
+make USE_QRCODE=0
+exit # end fakeroot
+
+
+### $((STEPN++)): Add files to package ###
+
+cd $CTEMP; mkdir -p pkg/$CHOME; mkdir -p pkg/$CDATA; mkdir -p pkg/etc/init.d; mkdir -p pkg/etc/cron.d
+
+find src -type f -executable -exec file -zi '{}' \; | grep "application/x-.*; charset=binary"
+cp src/src/${COINNAME}d pkg/$CHOME/$COIND
+#[ -f src/src/$COINNAME-cli ] && cp pkg/$CHOME/$COIND-cli
+#[ -f src/src/$COINNAME-tx ] && cp pkg/$CHOME/$COIND-tx
+#rm -r src
+
+strip pkg/$CHOME/$COIND;
+#[ -f pkg/$CHOME/$COIND-cli ] && strip pkg/$CHOME/$COIND-cli
+#[ -f pkg/$CHOME/$COIND-tx ] && strip pkg/$CHOME/$COIND-tx
+
+# Copy needed from backup
+find $COINDBKP
+#[ -d $COINDBKP/data ] && cp -r $COINDBKP/data pkg/$CHOME
+#[ -f $COINDBKP/$COIND.conf ] && cp $COINDBKP/$COIND.conf pkg/$CHOME
+#[ -f $COINDBKP/$COIND-cron ] && cp $COINDBKP/$COIND-cron pkg/$CHOME
+
+cat $COINDBKP/../coind-sh.tpl | sed -e "s/%COINDTAG%/$COINDTAG/g" > pkg/$CHOME/$COIND.sh
+cat $COINDBKP/../coind-initd.tpl | sed -e "s/%COIN%/$COIND/g" | sed -e "s/%COINU%/$COINU/g" > pkg/etc/init.d/coind-$COIND
+echo "*/5 * * * * $COINU [ -x /$CHOME/$COIND-cron ] && /$CHOME/$COIND-cron" > pkg/etc/cron.d/coind-$COIND
+
+
+### $((STEPN++)): Add control files (https://habrahabr.ru/post/78094/) ###
+
+sudo apt-get install dpkg debconf debhelper lintian md5deep
+
+cd pkg; mkdir DEBIAN
+
+cat > DEBIAN/preinst <<EOL
+#!/bin/bash -e
+echo "  Install coind-$COINU"
+echo "- sudo -u $COINU /$CHOME/$COIND -conf=/$CHOME/$COIND.conf -datadir=/$CDATA -pid=/$DATA/$COIND.pid stop"
+sudo -u $COINU /$CHOME/$COIND -conf=/$CHOME/$COIND.conf -datadir=/$CDATA -pid=/$CDATA/$COIND.pid stop
+echo "- adduser $COINU:$GROUP"
+if ! id -u "$COINU" > /dev/null 2>&1; then adduser --system --quiet --ingroup $GROUP --home /$CHOME --no-create-home --disabled-password $COINU; fi
+EOL
+
+cat > DEBIAN/postinst <<EOL
+#!/bin/bash -e
+echo "  Install success"
+echo "- set permissions"
+chown -R $COINU:$GROUP /$CHOME
+chmod 500 /$CHOME # u#read g#read
+chmod 500 /$CHOME/$COIND # u#exec
+[ -f /$CHOME/$COIND-cli ] && chmod 500 /$CHOME/$COIND-cli # u#exec
+[ -f /$CHOME/$COIND-tx ] && chmod 500 /$CHOME/$COIND-tx # u#exec
+[ -f /$CHOME/$COIND-cron ] && chmod 500 /$CHOME/$COIND-cron # u#exec
+[ -f /$CHOME/$COIND.conf ] && chmod 400 /$CHOME/$COIND.conf # u#read
+[ -f /$CHOME/$COIND.sh ] && chmod 500 /$CHOME/$COIND.sh # u#exec
+find /$CDATA -type d -exec chmod 700 {} + # u#full dirs
+find /$CDATA -type f -exec chmod 600 {} + # u#edit files
+echo "- update rc.d"
+[ -f /etc/init.d/coind-$COIND ] && update-rc.d coind-$COIND defaults
+#systemctl daemon-reload
+cat <<EOC
+  Coind conf:
+nano /$CHOME/$COIND.conf
+  Blockchain:
+cd /$CDATA
+wget -O- --no-check-certificate https://verge-blockchain.com 2>/dev/null | egrep -o "[^\"]*\.zip"
+wget -O- --no-check-certificate %LINK%
+unzip .*Blockchain*.zip
+  Usage:
+./$COIND.sh start
+./$COIND.sh getinfo
+EOC
+EOL
+
+#> DEBIAN/prerm
+cat > DEBIAN/postrm <<EOL
+#!/bin/bash
+[ -f /etc/init.d/coind-$COIND ] && update-rc.d coind-$COIND disable
+[ -f /etc/init.d/coind-$COIND ] && rm /etc/init.d/coind-$COIND
+EOL
+
+
+### $((STEPN++)): Configure package ###
+
+md5deep -l -o f -r var -r etc > DEBIAN/md5sums; cat DEBIAN/md5sums
+find etc/ -type f | sed "s/^/\//" > DEBIAN/conffiles; cat DEBIAN/conffiles
+
+# Get info
+chmod 755 $CHOME/$COIND
+#dpkg --print-architecture # show system architecture
+#objdump -p $CHOME/$COIND | grep NEEDED # show needed libraries
+#dpkg -S libcrypto.so # show libraries info
+objdump -f $CHOME/$COIND # | grep -E "арх|arch" | cut --delimiter=" " -f 2 | cut --delimiter="," -f 1 # show bynaries architecture
+sudo -u $COINU $CTEMP/pkg/$CHOME/$COIND -datadir=$CTEMP/pkg/$CDATA --help | head -3 # show wallet version
+
+COINDVER=%COINDVERSION% # set wallet version
+COINDARC=%ARCHITECTURE% # set architecture
+COINDDEB=coind-${COIND,,}-\${COINDVER,,}-\${COINDARC,,}.deb
+
+cat > DEBIAN/control <<EOL
+Package: coind-$COINU
+Version: \$COINDVER
+Architecture: \$COINDARC
+Maintainer: andronick83 <andronick.mail@gmail.com>
+Depends: adduser, libboost-all-dev (= 1.55.0.2), libdb-dev (= 4.8.30-1), libc6-dev
+Vcs-Git: $COINDSRC
+Vcs-browser: $COINDSRC
+Priority: optional
+Description: $COINNAME [$COIND] https://github.com/andronick83/coind-${COIND,,}
+ $COINDSRC
+EOL
+cat DEBIAN/control
+
+# Set permissions
+cd $CTEMP
+chown -R root:root pkg/*
+find pkg/* -type d -exec chmod 755 {} + # root#full :root#exec home dirs
+find pkg/* -type f -exec chmod 644 {} + # root#write :root#read home files
+chmod 755 pkg/DEBIAN/preinst
+chmod 755 pkg/DEBIAN/postinst
+#chmod 755 pkg/DEBIAN/prerm
+chmod 755 pkg/DEBIAN/postrm
+chmod 755 pkg/etc/init.d/coind-XVG
+
+
+### $((STEPN++)): Build and install package ###
+
+cd $CTEMP
+dpkg -b pkg \$COINDDEB
+lintian \$COINDDEB
+cp \$COINDDEB $COINDBKP/\$COINDDEB
+#rm -r pkg
+
+dpkg -i \$COINDDEB
+apt-get update; apt-get install -f # install dependencies
+
+ENDOFSCRIPT
+
+
+chmod +x $CTEMP/$COIND-install
+$CTEMP/$COIND-install $@
