@@ -58,8 +58,8 @@ cd $CTEMP; mkdir -p pkg/$CHOME; mkdir -p pkg/$CDATA; mkdir -p pkg/etc/init.d; mk
 
 find src -type f -executable -exec file -zi '{}' \; | grep "application/x-.*; charset=binary"
 cp src/src/${COINNAME}d pkg/$CHOME/$COIND
-#[ -f src/src/$COINNAME-cli ] && cp pkg/$CHOME/$COIND-cli
-#[ -f src/src/$COINNAME-tx ] && cp pkg/$CHOME/$COIND-tx
+#[ -f src/src/$COINNAME-cli ] && cp src/src/$COINNAME-cli pkg/$CHOME/$COIND-cli
+#[ -f src/src/$COINNAME-tx ] && cp src/src/$COINNAME-tx pkg/$CHOME/$COIND-tx
 #rm -r src
 
 strip pkg/$CHOME/$COIND;
@@ -86,10 +86,10 @@ cd pkg; mkdir DEBIAN
 cat > DEBIAN/preinst <<EOL
 #!/bin/bash -e
 echo "  Install coind-$COINU"
-echo "- sudo -u $COINU /$CHOME/$COIND -conf=/$CHOME/$COIND.conf -datadir=/$CDATA -pid=/$DATA/$COIND.pid stop"
-sudo -u $COINU /$CHOME/$COIND -conf=/$CHOME/$COIND.conf -datadir=/$CDATA -pid=/$CDATA/$COIND.pid stop
 echo "- adduser $COINU:$GROUP"
 if ! id -u "$COINU" > /dev/null 2>&1; then adduser --system --quiet --ingroup $GROUP --home /$CHOME --no-create-home --disabled-password $COINU; fi
+echo "- sudo -u $COINU /$CHOME/$COIND -conf=/$CHOME/$COIND.conf -datadir=/$CDATA -pid=/$CDATA/$COIND.pid stop"
+[ -f /$CHOME/$COIND ] && sudo -u $GROUP /$CHOME/$COIND -conf=/$CHOME/$COIND.conf -datadir=/$CDATA -pid=/$CDATA/$COIND.pid stop
 EOL
 
 cat > DEBIAN/postinst <<EOL
@@ -171,7 +171,7 @@ chmod 755 pkg/DEBIAN/preinst
 chmod 755 pkg/DEBIAN/postinst
 #chmod 755 pkg/DEBIAN/prerm
 chmod 755 pkg/DEBIAN/postrm
-chmod 755 pkg/etc/init.d/coind-XVG
+chmod 755 pkg/etc/init.d/coind-$COIND
 
 
 ### $((STEPN++)): Build and install package ###
